@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/IronSoftware.OldPhonePad.App/IronSoftware.OldPhonePad.App.csproj" />
+    <Project Path="src/IronSoftware.OldPhonePad/IronSoftware.OldPhonePad.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/IronSoftware.OldPhonePad.Tests/IronSoftware.OldPhonePad.Tests.csproj" />
+  </Folder>
+</Solution>
