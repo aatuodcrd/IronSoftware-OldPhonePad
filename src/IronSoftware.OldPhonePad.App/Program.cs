@@ -24,8 +24,7 @@ namespace IronSoftware.OldPhonePad.App
 
                 try
                 {
-                    // Ensure input is not null for the library call, although basic validation handles nulls
-                    string result = PhonePad.OldPhonePad(input ?? string.Empty);
+                    string result = PhonePad.Decode(input ?? string.Empty);
                     Console.WriteLine($"Output: {result}");
                 }
                 catch (Exception ex)

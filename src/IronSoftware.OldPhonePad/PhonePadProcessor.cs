@@ -1,88 +1,173 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace IronSoftware.OldPhonePad
 {
     /// <summary>
-    /// internal processor that handles the state machine logic for the phone pad.
+    /// Internal processor that handles the state machine logic for the phone pad.
+    /// Uses modern C# patterns including aggressive inlining, span-based processing, and immutable state.
     /// </summary>
-    internal class PhonePadProcessor
+    internal sealed class PhonePadProcessor
     {
-        private readonly StringBuilder _resultBuffer = new StringBuilder();
-        private char? _currentButton = null;
-        private int _pressCount = 0;
+        private const string InvalidInputMessage = "Error: Input must end with a send button '#'.";
+        private const char SendButton = '#';
+        private const char BackspaceButton = '*';
+        private const char PauseButton = ' ';
+        private const int DefaultCapacity = 32; // Pre-allocated capacity for StringBuilder
+
+        private readonly IKeypadLayout _keypadLayout;
+        private readonly StringBuilder _resultBuffer;
+        private ButtonState _currentState;
+
+        /// <summary>
+        /// Represents the state of the current button being pressed.
+        /// Implemented as a readonly record struct for immutability.
+        /// </summary>
+        private readonly record struct ButtonState
+        {
+            public char? Button { get; init; }
+            public int PressCount { get; init; }
+
+            public bool IsActive => Button.HasValue;
+
+            public static ButtonState Empty => default;
+
+            public ButtonState IncrementPress() => this with { PressCount = PressCount + 1 };
+
+            public static ButtonState Start(char button) => new() { Button = button, PressCount = 1 };
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the PhonePadProcessor with the specified keypad layout.
+        /// </summary>
+        /// <param name="keypadLayout">The keypad layout to use for decoding.</param>
+        /// <exception cref="ArgumentNullException">Thrown when keypadLayout is null.</exception>
+        public PhonePadProcessor(IKeypadLayout keypadLayout)
+        {
+            _keypadLayout = keypadLayout ?? throw new ArgumentNullException(nameof(keypadLayout));
+            _resultBuffer = new StringBuilder(DefaultCapacity);
+            _currentState = ButtonState.Empty;
+        }
 
         /// <summary>
         /// Processes the input string and returns the decoded message.
         /// </summary>
         /// <param name="input">The sequence of button presses.</param>
         /// <returns>The decoded string.</returns>
+        /// <exception cref="ArgumentException">Thrown when input is invalid.</exception>
         public string Process(string input)
         {
-            if (string.IsNullOrEmpty(input) || !input.EndsWith("#"))
-            {
-                throw new ArgumentException("Error: Input must end with a send button '#'.");
-            }
+            ValidateInput(input);
+            return ProcessCharacters(input);
+        }
 
-            foreach (char c in input)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ValidateInput(string? input)
+        {
+            if (string.IsNullOrEmpty(input) || !input.EndsWith(SendButton))
             {
-                if (c == '#')
+                throw new ArgumentException(InvalidInputMessage, nameof(input));
+            }
+        }
+
+        private string ProcessCharacters(string input)
+        {
+            // Use ReadOnlySpan for better performance (no allocations)
+            ReadOnlySpan<char> chars = input.AsSpan();
+            
+            foreach (char c in chars)
+            {
+                ProcessCharacter(c);
+
+                if (c == SendButton)
                 {
-                    Commit();
                     return _resultBuffer.ToString();
                 }
-                else if (c == '*')
-                {
-                    Commit(); // Confirm pending char first
-                    _currentButton = null;
-                    if (_resultBuffer.Length > 0)
-                    {
-                        _resultBuffer.Length--; // Backspace
-                    }
-                }
-                else if (c == ' ')
-                {
-                    Commit();
-                    _currentButton = null;
-                }
-                else if (StandardKeypadLayout.Mapping.ContainsKey(c))
-                {
-                    if (_currentButton == c)
-                    {
-                        _pressCount++;
-                    }
-                    else
-                    {
-                        Commit();
-                        _currentButton = c;
-                        _pressCount = 1;
-                    }
-                }
-                // Ignore invalid characters as per implicit requirement to process valid input loop, 
-                // or we could throw. The requirements didn't specify handling invalid chars explicitly 
-                // other than the structure, but usually skipped or cycle logic applies. 
-                // We will stick to processing known digits/logic.
             }
 
-            // Should not be reached due to validation check at start and return on '#'
             return _resultBuffer.ToString();
         }
 
-        private void Commit()
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ProcessCharacter(char c)
         {
-            if (_currentButton == null)
+            switch (c)
+            {
+                case SendButton:
+                    HandleSend();
+                    break;
+                case BackspaceButton:
+                    HandleBackspace();
+                    break;
+                case PauseButton:
+                    HandlePause();
+                    break;
+                default:
+                    HandleDigit(c);
+                    break;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void HandleSend()
+        {
+            CommitCurrentButton();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void HandleBackspace()
+        {
+            CommitCurrentButton();
+            _currentState = ButtonState.Empty;
+
+            if (_resultBuffer.Length > 0)
+            {
+                _resultBuffer.Length--;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void HandlePause()
+        {
+            CommitCurrentButton();
+            _currentState = ButtonState.Empty;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void HandleDigit(char digit)
+        {
+            if (!_keypadLayout.Mapping.ContainsKey(digit))
+            {
+                return; // Ignore invalid characters
+            }
+
+            if (_currentState.Button == digit)
+            {
+                _currentState = _currentState.IncrementPress();
+            }
+            else
+            {
+                CommitCurrentButton();
+                _currentState = ButtonState.Start(digit);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitCurrentButton()
+        {
+            if (!_currentState.IsActive)
             {
                 return;
             }
 
-            if (StandardKeypadLayout.Mapping.TryGetValue(_currentButton.Value, out string options))
+            if (_keypadLayout.Mapping.TryGetValue(_currentState.Button!.Value, out string? options))
             {
-                int index = (_pressCount - 1) % options.Length;
+                int index = (_currentState.PressCount - 1) % options.Length;
                 _resultBuffer.Append(options[index]);
             }
 
-            _currentButton = null;
-            _pressCount = 0;
+            _currentState = ButtonState.Empty;
         }
     }
 }
